@@ -1,0 +1,758 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SolarTariff AI Sentinel</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-dark: #0f172a;
+            --sidebar-bg: #020617;
+            /* Very dark, almost black */
+            --card-bg: #020617;
+            --text-primary: #f8fafc;
+            --text-secondary: #94a3b8;
+            --accent-green: #10b981;
+            --accent-green-hover: #059669;
+            --border-color: #334155;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Inter', sans-serif;
+        }
+
+        body {
+            background-color: var(--bg-dark);
+            color: var(--text-primary);
+            display: flex;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        /* Sidebar */
+        .sidebar {
+            width: 260px;
+            background-color: var(--sidebar-bg);
+            border-right: 1px solid var(--border-color);
+            display: flex;
+            flex-direction: column;
+            padding: 1.5rem;
+        }
+
+        .logo {
+            font-size: 1.25rem;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            margin-bottom: 2.5rem;
+        }
+
+        .logo-icon {
+            width: 32px;
+            height: 32px;
+            background-color: var(--accent-green);
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .nav-item {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            padding: 0.75rem 1rem;
+            color: var(--text-secondary);
+            text-decoration: none;
+            border-radius: 8px;
+            margin-bottom: 0.5rem;
+            transition: all 0.2s;
+        }
+
+        .nav-item.active {
+            background-color: var(--accent-green);
+            color: white;
+        }
+
+        .nav-item:hover:not(.active) {
+            background-color: rgba(255, 255, 255, 0.05);
+            color: var(--text-primary);
+        }
+
+        .agent-status {
+            margin-top: auto;
+            padding-top: 1.5rem;
+            border-top: 1px solid var(--border-color);
+        }
+
+        .start-btn {
+            width: 100%;
+            background-color: transparent;
+            border: 1px solid var(--accent-green);
+            color: var(--accent-green);
+            padding: 0.75rem;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+            transition: all 0.2s;
+        }
+
+        .start-btn:hover {
+            background-color: var(--accent-green);
+            color: white;
+        }
+
+        .start-btn.loading {
+            opacity: 0.7;
+            cursor: not-allowed;
+        }
+
+        /* Main Content - White Background */
+        .main-content {
+            flex: 1;
+            padding: 2rem;
+            overflow-y: auto;
+            background-color: #ffffff;
+            color: #0f172a;
+        }
+
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 2rem;
+        }
+
+        .header h1 {
+            font-size: 1.5rem;
+            font-weight: 600;
+            color: #0f172a;
+        }
+
+        .header p {
+            color: #64748b !important;
+        }
+
+        .status-badge {
+            background-color: rgba(16, 185, 129, 0.1);
+            color: var(--accent-green);
+            padding: 0.5rem 1rem;
+            border-radius: 20px;
+            font-size: 0.875rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            border: 1px solid var(--accent-green);
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            background-color: var(--accent-green);
+            border-radius: 50%;
+            box-shadow: 0 0 10px var(--accent-green);
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0% {
+                transform: scale(1);
+                opacity: 1;
+            }
+
+            50% {
+                transform: scale(1.2);
+                opacity: 0.7;
+            }
+
+            100% {
+                transform: scale(1);
+                opacity: 1;
+            }
+        }
+
+        /* Stats Grid */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 2rem;
+        }
+
+        .stat-card {
+            background-color: var(--sidebar-bg);
+            padding: 1.5rem;
+            border-radius: 12px;
+            border: 2px solid #000000;
+            /* Much darker border */
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+            color: var(--text-primary);
+            /* Fix contrast on dark card */
+        }
+
+        .stat-label {
+            color: var(--text-secondary);
+            font-size: 0.875rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .stat-value {
+            font-size: 1.5rem;
+            font-weight: 600;
+        }
+
+        /* States Grid */
+        .section-title {
+            margin-top: 2rem;
+            padding-top: 1rem;
+            border-top: 1px solid #e2e8f0;
+            margin-bottom: 1rem;
+            font-size: 1.125rem;
+            font-weight: 600;
+            color: #0f172a;
+        }
+
+        .states-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+            gap: 1rem;
+        }
+
+        .state-card {
+            background-color: #1e293b;
+            /* Dark slate background */
+            padding: 1.5rem;
+            border-radius: 12px;
+            border: 1px solid #334155;
+            /* Subtle light border */
+            cursor: pointer;
+            color: #ffffff;
+            /* White text */
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            height: 100px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        /* DIM STATE (Default) */
+        .state-card.dim {
+            background-color: #0f172a;
+            /* Very dark blue/black */
+            border: 1px solid #334155;
+            color: #94a3b8;
+            /* Slightly dimmed text */
+            cursor: default;
+            pointer-events: none;
+        }
+
+        /* GREEN STATE (Active/Available) */
+        .state-card.green,
+        .state-card.active {
+            opacity: 1;
+            filter: none;
+            cursor: pointer;
+            pointer-events: auto;
+            border: 2px solid #047857 !important;
+            background: #10b981 !important;
+            color: #000000 !important;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+        }
+
+        .state-card.green:hover,
+        .state-card.active:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 10px 15px -3px rgba(16, 185, 129, 0.2);
+            border-color: #34d399 !important;
+        }
+
+        /* RED STATE (Missing/Unavailable) */
+        .state-card.red {
+            opacity: 1;
+            filter: none;
+            background: #ef4444 !important;
+            border: 2px solid #b91c1c !important;
+            color: #ffffff !important;
+            cursor: not-allowed;
+            pointer-events: none;
+        }
+
+        .state-name {
+            font-weight: 600;
+            font-size: 1rem;
+            z-index: 2;
+        }
+
+        /* EXCEL MODAL */
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.7);
+            backdrop-filter: blur(4px);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 2000;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.3s;
+        }
+
+        .modal-overlay.show {
+            opacity: 1;
+            pointer-events: auto;
+        }
+
+        .modal-content {
+            background-color: var(--bg-dark);
+            width: 90%;
+            height: 90%;
+            border-radius: 16px;
+            border: 1px solid var(--border-color);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+        }
+
+        .modal-header {
+            padding: 1.5rem;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background-color: var(--sidebar-bg);
+        }
+
+        .modal-title {
+            font-size: 1.25rem;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        .close-btn {
+            background: none;
+            border: none;
+            color: var(--text-secondary);
+            font-size: 1.5rem;
+            cursor: pointer;
+            width: 32px;
+            height: 32px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 50%;
+            transition: all 0.2s;
+        }
+
+        .close-btn:hover {
+            background-color: rgba(255, 255, 255, 0.1);
+            color: white;
+        }
+
+        .modal-body {
+            flex: 1;
+            overflow: auto;
+            padding: 1rem;
+        }
+
+        /* DATA TABLE */
+        .excel-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.875rem;
+            white-space: nowrap;
+        }
+
+        .excel-table th,
+        .excel-table td {
+            padding: 0.75rem 1rem;
+            border: 1px solid var(--border-color);
+            text-align: left;
+        }
+
+        .excel-table th {
+            background-color: var(--sidebar-bg);
+            color: var(--text-secondary);
+            font-weight: 600;
+            position: sticky;
+            top: 0;
+            z-index: 10;
+        }
+
+        .excel-table tr:nth-child(even) {
+            background-color: rgba(255, 255, 255, 0.02);
+        }
+
+        .excel-table tr:hover {
+            background-color: rgba(16, 185, 129, 0.05);
+        }
+
+        /* Modal/Toast */
+        .toast {
+            position: fixed;
+            bottom: 2rem;
+            right: 2rem;
+            padding: 1rem 1.5rem;
+            border-radius: 8px;
+            background-color: var(--sidebar-bg);
+            border: 1px solid var(--border-color);
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            transform: translateY(150%);
+            transition: transform 0.3s cubic-bezier(0.18, 0.89, 0.32, 1.28);
+            z-index: 3000;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+        }
+
+        .toast.show {
+            transform: translateY(0);
+        }
+
+        .toast.success {
+            border-left: 4px solid var(--accent-green);
+        }
+
+        .toast.error {
+            border-left: 4px solid #ef4444;
+        }
+
+        .spinner {
+            width: 20px;
+            height: 20px;
+            border: 2px solid rgba(255, 255, 255, 0.3);
+            border-radius: 50%;
+            border-top-color: white;
+
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            to {
+                transform: rotate(360deg);
+            }
+        }
+
+        /* Loading Overlay */
+        .state-card .loading-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.6);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 10;
+        }
+
+        /* Spinner */
+        .state-spinner {
+            width: 24px;
+            height: 24px;
+            border: 3px solid #ffffff;
+            border-top: 3px solid transparent;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        /* Completed Border (White) */
+        .state-card.completed {
+            border: 2px solid #ffffff !important;
+        }
+    </style>
+</head>
+
+<body>
+    <!-- ... same sidebar ... -->
+    <div class="sidebar">
+        <div class="logo">
+            <div class="logo-icon">⚡</div>
+            <span>Landed Tariff Automation</span>
+        </div>
+
+        <nav>
+            <a href="#" class="nav-item active">
+                <span>Overview</span>
+            </a>
+            <a href="#" class="nav-item">
+                <span>Live Monitor</span>
+            </a>
+            <a href="#" class="nav-item">
+                <span>Email Alerts</span>
+            </a>
+            <a href="#" class="nav-item">
+                <span>Extraction Lab</span>
+            </a>
+        </nav>
+
+        <div class="agent-status">
+            <div style="margin-bottom: 0.5rem; color: var(--text-secondary); font-size: 0.75rem;">AGENT STATUS</div>
+            <button class="start-btn" id="startAgentBtn" onclick="runAgent()">
+                <div class="spinner" id="btnSpinner" style="display: none;"></div>
+                <span id="btnText">Start Agent</span>
+            </button>
+        </div>
+    </div>
+
+    <div class="main-content">
+        <div class="header">
+            <div>
+                <h1>Dashboard Overview</h1>
+                <p style="color: var(--text-secondary); font-size: 0.875rem;">Landed Tariff Agentic AI
+                    Automation</p>
+            </div>
+            <div class="status-badge">
+                <div class="status-dot"></div>
+                System Online
+            </div>
+        </div>
+
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-label">Monitored Jurisdictions</div>
+                <div class="stat-value" style="font-size: 1.25rem;">28 States + 8 UTs</div>
+                <div style="color: var(--accent-green); font-size: 0.75rem; margin-top: 0.5rem;">100% Coverage</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Updates Today</div>
+                <div class="stat-value" id="updatesCount">{{ updated_count }}</div>
+                <div style="color: var(--text-secondary); font-size: 0.75rem; margin-top: 0.5rem;">Files modified today
+                </div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Sent Emails</div>
+                <div class="stat-value">0</div>
+                <div style="color: var(--accent-green); font-size: 0.75rem; margin-top: 0.5rem;">Delivered successfully
+                </div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Pending Emails</div>
+                <div class="stat-value">0</div>
+                <div style="color: var(--text-secondary); font-size: 0.75rem; margin-top: 0.5rem;">Requires approval
+                </div>
+            </div>
+        </div>
+
+        <div class="section-title">Live Monitoring Grid</div>
+        <!-- Status Label -->
+        <div id="statusLabel"
+            style="margin-bottom: 1rem; color: var(--text-secondary); font-size: 0.9rem; height: 1.2em;"></div>
+
+        <div class="states-grid" id="statesGrid">
+            {% for state in states %}
+            <div class="state-card dim" id="card-{{ state.name }}" onclick="viewStateData('{{ state.name }}')">
+                <div class="state-name">{{ state.name }}</div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+
+    <!-- Modal -->
+    <div class="modal-overlay" id="excelModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <div class="modal-title" id="modalTitle">State Data</div>
+                <button class="close-btn" onclick="closeModal()">×</button>
+            </div>
+            <div class="modal-body" id="modalBody">
+                <p style="color: var(--text-secondary); text-align: center;">Loading data...</p>
+            </div>
+        </div>
+    </div>
+
+    <div class="toast" id="toast">
+        <span id="toastMessage">Operation successful</span>
+    </div>
+
+    <script>
+        function showToast(message, type = 'success') {
+            const toast = document.getElementById('toast');
+            const msg = document.getElementById('toastMessage');
+            msg.textContent = message;
+            toast.className = `toast ${type} show`;
+            setTimeout(() => {
+                toast.classList.remove('show');
+            }, 3000);
+        }
+
+        let agentRunStarted = false;
+
+        async function checkStatus() {
+            try {
+                let response = await fetch('/get-progress');
+                if (!response.ok) response = await fetch('/get-status');
+
+                const data = await response.json();
+                let statesMap = data;
+                let currentTask = null;
+
+                if (data.states) {
+                    statesMap = data.states;
+                    currentTask = data.current_task;
+                    if (currentTask) agentRunStarted = true;
+                }
+
+                const label = document.getElementById('statusLabel');
+                if (label) {
+                    if (currentTask) {
+                        label.textContent = `Current Process: ${currentTask}...`;
+                    } else if (agentRunStarted) {
+                        label.textContent = 'Process Completed.';
+                    } else {
+                        label.textContent = '';
+                    }
+                }
+
+                Object.entries(statesMap).forEach(([stName, info]) => {
+                    const card = document.getElementById(`card-${stName}`);
+                    if (!card) return;
+
+                    let exists = (typeof info === 'object') ? info.has_file : info;
+
+                    // LOGIC:
+                    // 1. If agent hasn't started yet -> All Dim.
+                    // 2. If agent is currently running -> All Dim (Wait for final results).
+                    // 3. If agent has finished (agentRunStarted is true AND currentTask is null) -> Show Green/Red.
+
+                    if (!agentRunStarted || currentTask) {
+                        card.className = 'state-card dim';
+                    } else {
+                        // Process finished, show final results
+                        if (exists) {
+                            card.className = 'state-card green active';
+                        } else {
+                            card.className = 'state-card red';
+                        }
+                    }
+                });
+
+            } catch (e) { console.error(e); }
+        }
+
+        async function runAgent() {
+            const btn = document.getElementById('startAgentBtn');
+            const spinner = document.getElementById('btnSpinner');
+            const txt = document.getElementById('btnText');
+
+            if (btn.classList.contains('loading')) return;
+
+            agentRunStarted = true;
+            btn.classList.add('loading');
+            spinner.style.display = 'block';
+            txt.textContent = 'Running Agents...';
+
+            // Initial immediate check
+            checkStatus();
+            const intervalId = setInterval(checkStatus, 2000);
+
+            try {
+                const response = await fetch('/start-agent', { method: 'POST' });
+                const data = await response.json();
+
+                if (data.status === 'success') {
+                    showToast('Process Completed successfully!', 'success');
+                    if (data.new_count !== undefined) {
+                        document.getElementById('updatesCount').textContent = data.new_count;
+                    }
+                } else {
+                    showToast('Error: ' + data.message, 'error');
+                }
+            } catch (error) {
+                showToast('Network Error', 'error');
+            } finally {
+                clearInterval(intervalId);
+                // Last sync to show final Green/Red
+                await checkStatus();
+                btn.classList.remove('loading');
+                spinner.style.display = 'none';
+                txt.textContent = 'Start Agent';
+            }
+        }
+
+        // Initialize status on load
+        document.addEventListener('DOMContentLoaded', checkStatus);
+
+        async function viewStateData(state) {
+            // Only allow viewing if active
+            const card = document.getElementById(`card-${state}`);
+            if (card.classList.contains('dim')) return;
+
+            const modal = document.getElementById('excelModal');
+            const title = document.getElementById('modalTitle');
+            const body = document.getElementById('modalBody');
+
+            title.textContent = `${state} Tariff Data`;
+            body.innerHTML = '<div style="display:flex;justify-content:center;padding:2rem;"><div class="spinner" style="display:block;border-color:var(--text-secondary);border-top-color:transparent"></div></div>';
+
+            modal.classList.add('show');
+
+            try {
+                const response = await fetch(`/get-state-data/${encodeURIComponent(state)}`);
+                const result = await response.json();
+
+                if (result.status === 'success') {
+                    // Render Table
+                    let html = '<table class="excel-table">';
+                    if (result.data && result.data.length > 0) {
+                        // Header
+                        html += '<thead><tr>';
+                        result.data[0].forEach(cell => {
+                            html += `<th>${cell}</th>`;
+                        });
+                        html += '</tr></thead><tbody>';
+
+                        // Body
+                        for (let i = 1; i < result.data.length; i++) {
+                            html += '<tr>';
+                            result.data[i].forEach(cell => {
+                                html += `<td>${cell}</td>`;
+                            });
+                            html += '</tr>';
+                        }
+                        html += '</tbody>';
+                    } else {
+                        html += '<tr><td>No data found</td></tr>';
+                    }
+                    html += '</table>';
+                    body.innerHTML = html;
+                } else {
+                    body.innerHTML = `<p style="color:#ef4444;text-align:center;">${result.message}</p>`;
+                }
+            } catch (error) {
+                body.innerHTML = '<p style="color:#ef4444;text-align:center;">Failed to load data</p>';
+            }
+        }
+
+        function closeModal() {
+            document.getElementById('excelModal').classList.remove('show');
+        }
+
+        // Close modal on escape key
+        document.addEventListener('keydown', function (event) {
+            if (event.key === "Escape") {
+                closeModal();
+            }
+        });
+    </script>
+</body>
+
+</html>
