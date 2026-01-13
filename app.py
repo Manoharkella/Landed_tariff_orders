@@ -74,7 +74,8 @@ def agent_worker():
         ("bihar.py", "Bihar"),
         ("puducherry.py", "Puducherry"),
         ("Himachalpradesh.py", "Himachal Pradesh"),
-        ("Assam.py", "Assam")
+        ("Assam.py", "Assam"),
+        ("uttarpradesh.py", "Uttar Pradesh")
     ]
     
     for script, display in scripts:
