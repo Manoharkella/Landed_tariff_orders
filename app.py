@@ -68,6 +68,7 @@ def agent_worker():
     scripts = [
         ("scraper.py", "Scraping"),
         ("ists.py", "ISTS"),
+        ("chhattisgarh.py", "Chhattisgarh"),
         ("Meghalaya.py", "Meghalaya"),
         ("Rajastan.py", "Rajasthan"),
         ("Madyapradesh.py", "Madhya Pradesh"),
