@@ -2,6 +2,11 @@ import os
 import json
 import glob
 import openpyxl
+try:
+    from database.database_utils import save_tariff_row
+    DB_SUCCESS = True
+except ImportError:
+    DB_SUCCESS = False
 import re
 
 def clean_year(y_str):
@@ -1359,6 +1364,9 @@ def update_excel(excel_path, state_name, discom_name, ists_loss, insts_loss, whe
         sheet = wb.active
         
         # Row 3
+        if sheet.max_row >= 3:
+            sheet.delete_rows(3, sheet.max_row - 2)
+            
         # Column A (1) is State
         sheet.cell(row=3, column=1).value = state_name
         
@@ -1430,6 +1438,54 @@ def update_excel(excel_path, state_name, discom_name, ists_loss, insts_loss, whe
         # Bulk Consumption Rebate -> Col 41
         sheet.cell(row=3, column=41).value = bulk_consumption_rebate
         
+        if DB_SUCCESS:
+            db_data = {
+                'financial_year': "FY2025-26",
+                'state': 'Chhattisgarh',
+                'discom': discom_name,
+                'ists_loss': ists_loss,
+                'insts_loss': insts_loss,
+                'wheeling_loss_11kv': wheeling_losses.get("11", "NA"),
+                'wheeling_loss_33kv': wheeling_losses.get("33", "NA"),
+                'wheeling_loss_66kv': wheeling_losses.get("66", "NA"),
+                'wheeling_loss_132kv': wheeling_losses.get("132", "NA"),
+                'ists_charges': "NA",
+                'insts_charges': insts_charges,
+                'wheeling_charges_11kv': wheeling_charges.get("11", "NA"),
+                'wheeling_charges_33kv': wheeling_charges.get("33", "NA"),
+                'wheeling_charges_66kv': wheeling_charges.get("66", "NA"),
+                'wheeling_charges_132kv': wheeling_charges.get("132", "NA"),
+                'css_charges_11kv': css_charges.get("11", "NA"),
+                'css_charges_33kv': css_charges.get("33", "NA"),
+                'css_charges_66kv': css_charges.get("66", "NA"),
+                'css_charges_132kv': css_charges.get("132", "NA"),
+                'css_charges_220kv': css_charges.get("220", "NA"),
+                'additional_surcharge': additional_surcharge,
+                'electricity_duty': "NA",
+                'tax_on_sale': "NA",
+                'fixed_charge_11kv': fixed_charges.get("11", "NA"),
+                'fixed_charge_33kv': fixed_charges.get("33", "NA"),
+                'fixed_charge_66kv': fixed_charges.get("66", "NA"),
+                'fixed_charge_132kv': fixed_charges.get("132", "NA"),
+                'fixed_charge_220kv': fixed_charges.get("220", "NA"),
+                'energy_charge_11kv': energy_charges.get("11", "NA"),
+                'energy_charge_33kv': energy_charges.get("33", "NA"),
+                'energy_charge_66kv': energy_charges.get("66", "NA"),
+                'energy_charge_132kv': energy_charges.get("132", "NA"),
+                'energy_charge_220kv': energy_charges.get("220", "NA"),
+                'fuel_surcharge': "NA",
+                'tod_charges': "NA",
+                'pf_rebate': pf_adjustment_rebate,
+                'lf_incentive': load_factor_incentive,
+                'grid_support_parallel_op_charges': grid_support_charges,
+                'ht_ehv_rebate_33_66kv': ht_ehv_rebate.get("33_66", "NA"),
+                'ht_ehv_rebate_132_above': ht_ehv_rebate.get("132_above", "NA"),
+                'bulk_rebate': bulk_consumption_rebate
+            }
+            # Sanitize
+            clean_db_data = {k: (str(v) if v is not None else "NA") for k, v in db_data.items()}
+            save_tariff_row(clean_db_data)
+            
         wb.save(excel_path)
         print(f"Updated {excel_path} with Bulk Consumption Rebate: {bulk_consumption_rebate}")
         

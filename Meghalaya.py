@@ -2,11 +2,17 @@ import json
 import re
 import os
 import openpyxl
+try:
+    from database.database_utils import save_tariff_row
+    DB_SUCCESS = True
+except ImportError:
+    DB_SUCCESS = False
 from datetime import datetime
 
 
 def extract_discom_names(jsonl_path):
     discom_names = []
+    import urllib.parse, re
     try:
         with open(jsonl_path, 'r', encoding='utf-8') as f:
             first_line = f.readline()
@@ -14,12 +20,39 @@ def extract_discom_names(jsonl_path):
                 data = json.loads(first_line)
                 doc_name = data.get("document_name", "")
                 if doc_name:
-                    discom_name = doc_name.split()[0]
-                    discom_names.append(discom_name)
+                    decoded = urllib.parse.unquote(doc_name)
+                    match = re.search(r"[A-Za-z]{3,}", decoded)
+                    if match:
+                        discom_name = match.group(0)
+                        discom_names.append(discom_name)
     except Exception as e:
         print(f"Error extracting discom name: {e}")
     
     return discom_names
+
+def find_value_in_jsonl(jsonl_path, table_keywords, row_keywords, value_constraint=lambda x: True):
+    if not jsonl_path or not os.path.exists(jsonl_path): return "NA"
+    with open(jsonl_path, 'r', encoding='utf-8') as f:
+        for line in f:
+            try:
+                data = json.loads(line)
+                h = data.get("table_heading", "").lower()
+                heading_match = all(k.lower() in h for k in table_keywords)
+                if heading_match:
+                    for row in data.get("rows", []):
+                        row_txt = str(row).lower()
+                        if all(k.lower() in row_txt for k in row_keywords):
+                            for v in list(row.values())[::-1]:
+                                if not v: continue
+                                try:
+                                    clean = re.sub(r'[^\d\.]', '', str(v))
+                                    if clean:
+                                        f_v = float(clean)
+                                        if value_constraint(f_v):
+                                            return str(v).strip()
+                                except: pass
+            except: pass
+    return "NA"
 
 def extract_losses(jsonl_path):
     insts_loss = None
@@ -117,50 +150,8 @@ def extract_wheeling_losses(jsonl_path):
     return losses
 
 def extract_transmission_charges(jsonl_path):
-    insts_c = None
-    target_headings = [
-        "transmission charge", 
-        "intra-state transmission system loss", 
-        "stu loss", 
-        "stu transmission loss", 
-        "transmission los",
-        "transmission loss"
-    ]
-    
-    with open(jsonl_path, 'r', encoding='utf-8') as f:
-        for line in f:
-            try:
-                data = json.loads(line)
-                heading = data.get("table_heading", "").lower()
-                
-                if any(k in heading for k in target_headings):
-                    for row in data.get("rows", []):
-                        r_txt = str(row).lower()
-                        # Strictly look for Intra-State or MePTCL charges/losses row
-                        # Relaxed: Allow 'stu' to count as transmission + state
-                        if (("transmission" in r_txt and ("intra" in r_txt or "meptcl" in r_txt or "state" in r_txt)) or "stu" in r_txt) and "total" not in r_txt:
-                            # Avoid Inter-State if explicit
-                            if "inter" in r_txt and "intra" not in r_txt: continue
-                            
-                            for v in row.values():
-                                try:
-                                    # Look for small float value (approx 0.76)
-                                    clean = re.sub(r'[^\d\.]', '', str(v))
-                                    if clean:
-                                        val = float(clean)
-                                        if 0.1 < val < 5:
-                                            # Prioritize rows with "rs/kwh" or "per unit"
-                                            if "rs/kwh" in r_txt or "per unit" in r_txt or "/ unit" in r_txt:
-                                                insts_c = val
-                                                break
-                                except: pass
-                        if insts_c: break
-                if insts_c: break
-            except: pass
-    if insts_c is None:
-        insts_c = "NA"
-    print(f"Extracted InSTS Charge: {insts_c}")
-    return insts_c
+    # Search for PGCIL or Transmission Charges in Meghalaya
+    return find_value_in_jsonl(jsonl_path, ["transmission", "charge"], ["rs/kwh"], lambda x: 0.1 <= x <= 2.0)
 
 def extract_wheeling_charges(jsonl_path):
     charges = {'11': None, '33': None, '66': None, '132': None}
@@ -712,7 +703,7 @@ def extract_ists_loss(json_path):
         print(f"Error extracting ISTS loss: {e}")
     return "NA"
 
-def update_excel_with_discoms(discom_names, ists_loss, insts_loss, wheel_losses, insts_c, wheel_charges, css_charges, additional_surcharge, fixed_charges, energy_charges, pf_rebate, lf_incentive, fuel_surcharge, tod_charges, grid_support_charges, voltage_rebate, bulk_rebate, excel_path):
+def update_excel_with_discoms(discom_names, ists_loss, insts_loss, wheel_losses, insts_c, wheel_charges, css_charges, additional_surcharge, fixed_charges, energy_charges, pf_rebate, lf_incentive, fuel_surcharge, tod_charges, grid_support_charges, voltage_rebate, bulk_rebate, excel_path, folder_name="Meghalaya", pdf_name=""):
     if not os.path.exists(excel_path): return
     wb = openpyxl.load_workbook(excel_path)
     sheet = wb.active
@@ -720,83 +711,146 @@ def update_excel_with_discoms(discom_names, ists_loss, insts_loss, wheel_losses,
     
     def get_c(name): return h_map.get(name.strip().lower())
     
+    # Extract Discom from actual discom_names (first word from document_name in JSONL)
+    import urllib.parse
+    discom_from_json = "NA"
+    if discom_names and discom_names[0]:
+        decoded = urllib.parse.unquote(discom_names[0])
+        first_word = decoded.split()[0] if decoded else ""
+        discom_from_json = first_word[:6] if len(first_word) >= 6 else first_word
+    
     # Debug print
     bc_idx = get_c('Bulk Consumption Rebate')
     print(f"DEBUG: Bulk Consumption Rebate Column Index: {bc_idx}")
     
     start_r = 3
-    for i, discom in enumerate(discom_names):
-        r = start_r + i
-        if get_c('States'): sheet.cell(row=r, column=get_c('States')).value = os.path.basename(os.getcwd())
-        if get_c('DISCOM'): sheet.cell(row=r, column=get_c('DISCOM')).value = discom
-        if ists_loss != "NA" and get_c('ISTS Loss'): sheet.cell(row=r, column=get_c('ISTS Loss')).value = ists_loss
-        if insts_loss and get_c('InSTS Loss'): sheet.cell(row=r, column=get_c('InSTS Loss')).value = insts_loss
-        if insts_c is not None and get_c('InSTS Charges'): sheet.cell(row=r, column=get_c('InSTS Charges')).value = insts_c
+    if sheet.max_row >= start_r:
+        sheet.delete_rows(start_r, sheet.max_row - start_r + 1)
         
-        for kv, val in wheel_losses.items():
-            col = get_c(f'Wheeling Loss - {kv} kV')
-            if val and col: sheet.cell(row=r, column=col).value = val
-            
-        for kv, val in wheel_charges.items():
-            col = get_c(f'Wheeling Charges - {kv} kV')
-            if val is not None and col: sheet.cell(row=r, column=col).value = val
+    # r is assigned below before use
+        
+    # Create single row with folder name and PDF-derived discom
+    r = start_r
+    if get_c('States'): sheet.cell(row=r, column=get_c('States')).value = folder_name
+    if get_c('DISCOM'):
+        print(f"Writing to DISCOM column: {discom_from_json}")
+        sheet.cell(row=r, column=get_c('DISCOM')).value = discom_from_json
+    if ists_loss != "NA" and get_c('ISTS Loss'): sheet.cell(row=r, column=get_c('ISTS Loss')).value = ists_loss
+    if insts_loss and get_c('InSTS Loss'): sheet.cell(row=r, column=get_c('InSTS Loss')).value = insts_loss
+    if insts_c is not None and get_c('InSTS Charges'): sheet.cell(row=r, column=get_c('InSTS Charges')).value = insts_c
+    
+    for kv, val in wheel_losses.items():
+        col = get_c(f'Wheeling Loss - {kv} kV')
+        if val and col: sheet.cell(row=r, column=col).value = val
+        
+    for kv, val in wheel_charges.items():
+        col = get_c(f'Wheeling Charges - {kv} kV')
+        if val is not None and col: sheet.cell(row=r, column=col).value = val
 
-        for kv, val in css_charges.items():
-            col = get_c(f'Cross Subsidy Surcharge - {kv} kV') or get_c(f'Cross Subsidy Charges - {kv} kV')
-            if val is not None and col: sheet.cell(row=r, column=col).value = val
+    for kv, val in css_charges.items():
+        col = get_c(f'Cross Subsidy Surcharge - {kv} kV') or get_c(f'Cross Subsidy Charges - {kv} kV')
+        if val is not None and col: sheet.cell(row=r, column=col).value = val
 
-        if additional_surcharge is not None and get_c('Additional Surcharge'):
-            sheet.cell(row=r, column=get_c('Additional Surcharge')).value = additional_surcharge
+    if additional_surcharge is not None and get_c('Additional Surcharge'):
+        sheet.cell(row=r, column=get_c('Additional Surcharge')).value = additional_surcharge
 
-        for kv, val in fixed_charges.items():
-            # Note 'Kv' capitalization for 11kV based on header check
-            k_str = f'{kv} Kv' if kv == '11' else f'{kv} kV'
-            col = get_c(f'Fixed Charge - {k_str}')
-            if col: sheet.cell(row=r, column=col).value = val
-            
-        for kv, val in energy_charges.items():
-            col = get_c(f'Energy Charge - {kv} kV')
-            if col: sheet.cell(row=r, column=col).value = val
+    for kv, val in fixed_charges.items():
+        # Note 'Kv' capitalization for 11kV based on header check
+        k_str = f'{kv} Kv' if kv == '11' else f'{kv} kV'
+        col = get_c(f'Fixed Charge - {k_str}')
+        if col: sheet.cell(row=r, column=col).value = val
+        
+    for kv, val in energy_charges.items():
+        col = get_c(f'Energy Charge - {kv} kV')
+        if col: sheet.cell(row=r, column=col).value = val
 
-        if pf_rebate != "NA" and get_c('Power Factor Adjustment Rebate'):
-             sheet.cell(row=r, column=get_c('Power Factor Adjustment Rebate')).value = pf_rebate
-        elif get_c('Power Factor Adjustment Rebate'):
-             sheet.cell(row=r, column=get_c('Power Factor Adjustment Rebate')).value = "NA"
+    if pf_rebate != "NA" and get_c('Power Factor Adjustment Rebate'):
+         sheet.cell(row=r, column=get_c('Power Factor Adjustment Rebate')).value = pf_rebate
+    elif get_c('Power Factor Adjustment Rebate'):
+         sheet.cell(row=r, column=get_c('Power Factor Adjustment Rebate')).value = "NA"
+         
+    if lf_incentive != "NA" and get_c('Load Factor Incentive'):
+         sheet.cell(row=r, column=get_c('Load Factor Incentive')).value = lf_incentive
+    elif get_c('Load Factor Incentive'):
+         sheet.cell(row=r, column=get_c('Load Factor Incentive')).value = "NA"
+
+    if fuel_surcharge != "NA" and get_c('Fuel Surcharge'):
+         sheet.cell(row=r, column=get_c('Fuel Surcharge')).value = fuel_surcharge
+    elif get_c('Fuel Surcharge'):
+         sheet.cell(row=r, column=get_c('Fuel Surcharge')).value = "NA"
+
+    if tod_charges != "NA" and get_c('TOD Charges'):
+         sheet.cell(row=r, column=get_c('TOD Charges')).value = tod_charges
+    elif get_c('TOD Charges'):
+         sheet.cell(row=r, column=get_c('TOD Charges')).value = "NA"
+
+    if grid_support_charges != "NA" and get_c('Grid Support /Parrallel Operation'):
+         sheet.cell(row=r, column=get_c('Grid Support /Parrallel Operation')).value = grid_support_charges
+    elif get_c('Grid Support /Parrallel Operation'):
+         sheet.cell(row=r, column=get_c('Grid Support /Parrallel Operation')).value = "NA"
+
+    if voltage_rebate['33_66'] != "NA" and get_c('HT ,EHV Rebate at 33/66 kV'):
+         sheet.cell(row=r, column=get_c('HT ,EHV Rebate at 33/66 kV')).value = voltage_rebate['33_66']
+    elif get_c('HT ,EHV Rebate at 33/66 kV'):
+         sheet.cell(row=r, column=get_c('HT ,EHV Rebate at 33/66 kV')).value = "NA"
+
+    if voltage_rebate['132'] != "NA" and get_c('HT ,EHV Rebate at 132 kV and above '): # Note space in key
+         sheet.cell(row=r, column=get_c('HT ,EHV Rebate at 132 kV and above ')).value = voltage_rebate['132']
+    elif get_c('HT ,EHV Rebate at 132 kV and above '):
+         sheet.cell(row=r, column=get_c('HT ,EHV Rebate at 132 kV and above ')).value = "NA"
+
+    if bulk_rebate != "NA" and get_c('Bulk Consumption Rebate'):
+         sheet.cell(row=r, column=get_c('Bulk Consumption Rebate')).value = bulk_rebate
+    elif get_c('Bulk Consumption Rebate'):
+         sheet.cell(row=r, column=get_c('Bulk Consumption Rebate')).value = "NA"
              
-        if lf_incentive != "NA" and get_c('Load Factor Incentive'):
-             sheet.cell(row=r, column=get_c('Load Factor Incentive')).value = lf_incentive
-        elif get_c('Load Factor Incentive'):
-             sheet.cell(row=r, column=get_c('Load Factor Incentive')).value = "NA"
-
-        if fuel_surcharge != "NA" and get_c('Fuel Surcharge'):
-             sheet.cell(row=r, column=get_c('Fuel Surcharge')).value = fuel_surcharge
-        elif get_c('Fuel Surcharge'):
-             sheet.cell(row=r, column=get_c('Fuel Surcharge')).value = "NA"
-
-        if tod_charges != "NA" and get_c('TOD Charges'):
-             sheet.cell(row=r, column=get_c('TOD Charges')).value = tod_charges
-        elif get_c('TOD Charges'):
-             sheet.cell(row=r, column=get_c('TOD Charges')).value = "NA"
-
-        if grid_support_charges != "NA" and get_c('Grid Support /Parrallel Operation'):
-             sheet.cell(row=r, column=get_c('Grid Support /Parrallel Operation')).value = grid_support_charges
-        elif get_c('Grid Support /Parrallel Operation'):
-             sheet.cell(row=r, column=get_c('Grid Support /Parrallel Operation')).value = "NA"
-
-        if voltage_rebate['33_66'] != "NA" and get_c('HT ,EHV Rebate at 33/66 kV'):
-             sheet.cell(row=r, column=get_c('HT ,EHV Rebate at 33/66 kV')).value = voltage_rebate['33_66']
-        elif get_c('HT ,EHV Rebate at 33/66 kV'):
-             sheet.cell(row=r, column=get_c('HT ,EHV Rebate at 33/66 kV')).value = "NA"
-
-        if voltage_rebate['132'] != "NA" and get_c('HT ,EHV Rebate at 132 kV and above '): # Note space in key
-             sheet.cell(row=r, column=get_c('HT ,EHV Rebate at 132 kV and above ')).value = voltage_rebate['132']
-        elif get_c('HT ,EHV Rebate at 132 kV and above '):
-             sheet.cell(row=r, column=get_c('HT ,EHV Rebate at 132 kV and above ')).value = "NA"
-
-        if bulk_rebate != "NA" and get_c('Bulk Consumption Rebate'):
-             sheet.cell(row=r, column=get_c('Bulk Consumption Rebate')).value = bulk_rebate
-        elif get_c('Bulk Consumption Rebate'):
-             sheet.cell(row=r, column=get_c('Bulk Consumption Rebate')).value = "NA"
+    if DB_SUCCESS:
+        db_data = {
+            'financial_year': "FY2025-26",
+            'state': folder_name,
+            'discom': discom_from_json,
+            'ists_loss': str(ists_loss) if ists_loss else "NA",
+            'insts_loss': str(insts_loss) if insts_loss else "NA",
+            'wheeling_loss_11kv': wheel_losses.get('11', "NA"),
+            'wheeling_loss_33kv': wheel_losses.get('33', "NA"),
+            'wheeling_loss_66kv': wheel_losses.get('66', "NA"),
+            'wheeling_loss_132kv': wheel_losses.get('132', "NA"),
+            'ists_charges': "NA",
+            'insts_charges': str(insts_c) if insts_c else "NA",
+            'wheeling_charges_11kv': wheel_charges.get('11', "NA"),
+            'wheeling_charges_33kv': wheel_charges.get('33', "NA"),
+            'wheeling_charges_66kv': wheel_charges.get('66', "NA"),
+            'wheeling_charges_132kv': wheel_charges.get('132', "NA"),
+            'css_charges_11kv': css_charges.get('11', "NA"),
+            'css_charges_33kv': css_charges.get('33', "NA"),
+            'css_charges_66kv': css_charges.get('66', "NA"),
+            'css_charges_132kv': css_charges.get('132', "NA"),
+            'css_charges_220kv': css_charges.get('220', "NA"),
+            'additional_surcharge': additional_surcharge if additional_surcharge else "NA",
+            'electricity_duty': "NA",
+            'tax_on_sale': "NA",
+            'fixed_charge_11kv': fixed_charges.get('11', "NA"),
+            'fixed_charge_33kv': fixed_charges.get('33', "NA"),
+            'fixed_charge_66kv': fixed_charges.get('66', "NA"),
+            'fixed_charge_132kv': fixed_charges.get('132', "NA"),
+            'fixed_charge_220kv': fixed_charges.get('220', "NA"),
+            'energy_charge_11kv': energy_charges.get('11', "NA"),
+            'energy_charge_33kv': energy_charges.get('33', "NA"),
+            'energy_charge_66kv': energy_charges.get('66', "NA"),
+            'energy_charge_132kv': energy_charges.get('132', "NA"),
+            'energy_charge_220kv': energy_charges.get('220', "NA"),
+            'fuel_surcharge': fuel_surcharge if fuel_surcharge else "NA",
+            'tod_charges': tod_charges if tod_charges else "NA",
+            'pf_rebate': pf_rebate if pf_rebate else "NA",
+            'lf_incentive': lf_incentive if lf_incentive else "NA",
+            'grid_support_parallel_op_charges': grid_support_charges if grid_support_charges else "NA",
+            'ht_ehv_rebate_33_66kv': voltage_rebate.get('33_66', "NA"),
+            'ht_ehv_rebate_132_above': voltage_rebate.get('132', "NA"),
+            'bulk_rebate': bulk_rebate if bulk_rebate else "NA"
+        }
+        # Sanitize
+        clean_db_data = {k: (str(v) if v is not None else "NA") for k, v in db_data.items()}
+        save_tariff_row(clean_db_data)
              
     wb.save(excel_path)
     print(f"Updated {excel_path} with accurate values.")
@@ -853,6 +907,7 @@ if __name__ == "__main__":
         vr = extract_voltage_rebate(j_f)
         br = extract_bulk_rebate(j_f)
         
-        update_excel_with_discoms(names, ists_l, insts_l, w_l, insts_c, w_c, css_c, add_s, fc, ec, pf_r, lf_i, fs, tod, gs, vr, br, e_f)
+        folder_name = os.path.basename(os.path.dirname(j_f))
+        update_excel_with_discoms(names, ists_l, insts_l, w_l, insts_c, w_c, css_c, add_s, fc, ec, pf_r, lf_i, fs, tod, gs, vr, br, e_f, folder_name=folder_name, pdf_name=os.path.basename(j_f))
     else:
         print("Meghalaya JSONL file not found. Please ensure scraper has run.")

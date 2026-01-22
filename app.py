@@ -1,9 +1,38 @@
 import os
+import shutil
+import stat
 import subprocess
 import threading
 import openpyxl
 from datetime import datetime
 from flask import Flask, render_template, jsonify, request
+from dotenv import load_dotenv
+
+def delete_folder_contents(folder_path):
+    def remove_readonly(func, path, _):
+        os.chmod(path, stat.S_IWRITE)
+        func(path)
+
+    if os.path.exists(folder_path):
+        for filename in os.listdir(folder_path):
+            file_path = os.path.join(folder_path, filename)
+            try:
+                if os.path.isfile(file_path) or os.path.islink(file_path):
+                    os.chmod(file_path, stat.S_IWRITE)
+                    os.unlink(file_path)
+                elif os.path.isdir(file_path):
+                    shutil.rmtree(file_path, onerror=remove_readonly)
+            except Exception as e:
+                print(f"Failed to delete {file_path}. Reason: {e}")
+
+# Run cleanup at Flask startup
+base_dir = os.path.dirname(os.path.abspath(__file__))
+for folder in ["Extraction", "Download", "ists_pdf", "ists_charge_pdf", "ists_extracted"]:
+    folder_path = os.path.join(base_dir, folder)
+    if os.path.exists(folder_path):
+        delete_folder_contents(folder_path)
+
+load_dotenv()
 
 app = Flask(__name__)
 
@@ -35,9 +64,14 @@ def run_script(script_name, display_name):
     env["PYTHONIOENCODING"] = "utf-8"
     
     try:
+        # Using the virtual environment's python if it exists, otherwise fallback to "python"
+        python_exe = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".venv", "Scripts", "python.exe")
+        if not os.path.exists(python_exe):
+            python_exe = "python"
+
         # Using -u for unbuffered output to ensure real-time logs in the monitor
         process = subprocess.Popen(
-            ["python", "-u", script_name],
+            [python_exe, "-u", script_name],
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
@@ -66,11 +100,14 @@ def agent_worker():
     IS_AGENT_RUNNING = True
     
     scripts = [
+        ("clear_excels.py", "Clearing Excels"),
+        ("Automation.py", "Automation"),
+        ("Auomation_ists.py", "ISTS Automation"),
         ("scraper.py", "Scraping"),
         ("ists.py", "ISTS"),
         ("chhattisgarh.py", "Chhattisgarh"),
         ("Meghalaya.py", "Meghalaya"),
-        ("Rajastan.py", "Rajasthan"),
+        ("Rajasthan.py", "Rajasthan"),
         ("Madyapradesh.py", "Madhya Pradesh"),
         ("bihar.py", "Bihar"),
         ("puducherry.py", "Puducherry"),
@@ -80,7 +117,28 @@ def agent_worker():
     ]
     
     for script, display in scripts:
+        # If we are about to start Scraping, clean previous extraction data
+        if script == "scraper.py":
+            AGENT_LOGS.append(f"[{datetime.now().strftime('%H:%M:%S')}] Cleaning previous extracted data...")
+            for folder in ["Extraction", "ists_extracted"]:
+                folder_path = os.path.join(base_dir, folder)
+                if os.path.exists(folder_path):
+                    delete_folder_contents(folder_path)
+
         run_script(script, display)
+        # Sync to DB if it's a state script
+        if script not in ["Automation.py", "scraper.py", "ists.py", "Auomation_ists.py"]:
+            state_name = display
+            excel_variants = [f"{state_name}.xlsx", f"{state_name.lower()}.xlsx", f"{state_name.replace(' ', '')}.xlsx"]
+            for v in excel_variants:
+                if os.path.exists(v):
+                    try:
+                        from database.database_utils import sync_excel_to_db
+                        sync_excel_to_db(v)
+                        AGENT_LOGS.append(f"[{datetime.now().strftime('%H:%M:%S')}] {v} synced to SQLite database.")
+                        break
+                    except Exception as e:
+                        AGENT_LOGS.append(f"[{datetime.now().strftime('%H:%M:%S')}] DB Sync Error: {str(e)}")
         
     CURRENT_PROCESSING_STATE = None
     IS_AGENT_RUNNING = False
@@ -173,5 +231,27 @@ def get_state_data(state_name):
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
+@app.route('/get-db-data', methods=['GET'])
+def get_db_data():
+    try:
+        import sqlite3
+        db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tariff_orders.db")
+        if not os.path.exists(db_path):
+            return jsonify({"status": "error", "message": "Database not found."}), 404
+            
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM tariff_data")
+        rows = cursor.fetchall()
+        
+        data = [dict(row) for row in rows]
+        conn.close()
+        return jsonify({"status": "success", "data": data})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
 if __name__ == '__main__':
-    app.run(debug=True, port=5000)
+    port = int(os.getenv("PORT", 5000))
+    debug = os.getenv("FLASK_DEBUG", "True").lower() == "true"
+    app.run(debug=debug, port=port)

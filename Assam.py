@@ -2,7 +2,36 @@ import json
 import re
 import os
 import openpyxl
+try:
+    from database.database_utils import save_tariff_row
+    DB_SUCCESS = True
+except ImportError:
+    DB_SUCCESS = False
 from datetime import datetime
+
+def find_value_in_jsonl(jsonl_path, table_keywords, row_keywords, value_constraint=lambda x: True):
+    if not jsonl_path or not os.path.exists(jsonl_path): return "NA"
+    with open(jsonl_path, 'r', encoding='utf-8') as f:
+        for line in f:
+            try:
+                data = json.loads(line)
+                h = data.get("table_heading", "").lower()
+                heading_match = all(k.lower() in h for k in table_keywords)
+                if heading_match:
+                    for row in data.get("rows", []):
+                        row_txt = str(row).lower()
+                        if all(k.lower() in row_txt for k in row_keywords):
+                            for v in list(row.values())[::-1]:
+                                if not v: continue
+                                try:
+                                    clean = re.sub(r'[^\d\.]', '', str(v))
+                                    if clean:
+                                        f_v = float(clean)
+                                        if value_constraint(f_v):
+                                            return str(v).strip()
+                                except: pass
+            except: pass
+    return "NA"
 
 def extract_discom_names(jsonl_path):
     discom_names = []
@@ -122,36 +151,8 @@ def extract_wheeling_losses(jsonl_path):
     return losses
 
 def extract_transmission_charges(jsonl_path):
-    insts_c = None
-    # Transmission Charges
-    with open(jsonl_path, 'r', encoding='utf-8') as f:
-        for line in f:
-            try:
-                data = json.loads(line)
-                heading = data.get("table_heading", "").lower()
-                
-                if "transmission" in heading and "charge" in heading:
-                   rows = data.get("rows", [])
-                   for row in rows:
-                       row_txt = str(row).lower()
-                       # Look for "per unit" or "rs/kwh"
-                       if "per unit" in row_txt or "rs/kwh" in row_txt or "rs. / unit" in row_txt:
-                           for v in row.values():
-                               try:
-                                   if not v: continue
-                                   clean = re.sub(r'[^\d\.]', '', str(v))
-                                   if clean:
-                                       val = float(clean)
-                                       if 0.01 < val < 5:
-                                           insts_c = val
-                                           break
-                               except: pass
-                       if insts_c: break
-                if insts_c: break
-            except: pass
-            
-    print(f"Extracted InSTS Charge: {insts_c}")
-    return insts_c
+    # Search for PGCIL or Transmission Charges in Assam
+    return find_value_in_jsonl(jsonl_path, ["transmission", "charge"], ["rs/kwh"], lambda x: 0.1 <= x <= 2.0)
 
 def extract_wheeling_charges(jsonl_path):
     charges = {'11': "NA", '33': "NA", '66': "NA", '132': "NA"}
@@ -807,6 +808,9 @@ def update_excel(discom_names, ists_loss, insts_loss, wheel_losses, insts_c, whe
     def get_c(name): return h_map.get(name.strip().lower())
 
     start_r = 3
+    if sheet.max_row >= start_r:
+        sheet.delete_rows(start_r, sheet.max_row - start_r + 1)
+    
     for i, discom in enumerate(discom_names):
         r = start_r + i
         if get_c('States'): sheet.cell(row=r, column=get_c('States')).value = 'Assam' # Or derived
@@ -874,6 +878,54 @@ def update_excel(discom_names, ists_loss, insts_loss, wheel_losses, insts_c, whe
         if ec['66'] and get_c('Energy Charge - 66 kV'): sheet.cell(row=r, column=get_c('Energy Charge - 66 kV')).value = ec['66']
         if ec['132'] and get_c('Energy Charge - 132 kV'): sheet.cell(row=r, column=get_c('Energy Charge - 132 kV')).value = ec['132']
         if ec['220'] and get_c('Energy Charge - 220 kV'): sheet.cell(row=r, column=get_c('Energy Charge - 220 kV')).value = ec['220']
+
+        if DB_SUCCESS:
+            db_data = {
+                'financial_year': "FY2025-26",
+                'state': 'Assam',
+                'discom': discom,
+                'ists_loss': str(ists) if ists else "NA",
+                'insts_loss': str(insts_l) if insts_l else "NA",
+                'wheeling_loss_11kv': wheel_losses.get('11', "NA"),
+                'wheeling_loss_33kv': wheel_losses.get('33', "NA"),
+                'wheeling_loss_66kv': wheel_losses.get('66', "NA"),
+                'wheeling_loss_132kv': wheel_losses.get('132', "NA"),
+                'ists_charges': "NA",
+                'insts_charges': str(insts_c) if insts_c else "NA",
+                'wheeling_charges_11kv': wheel_charges.get('11', "NA"),
+                'wheeling_charges_33kv': wheel_charges.get('33', "NA"),
+                'wheeling_charges_66kv': wheel_charges.get('66', "NA"),
+                'wheeling_charges_132kv': wheel_charges.get('132', "NA"),
+                'css_charges_11kv': css_charges.get('11', "NA"),
+                'css_charges_33kv': css_charges.get('33', "NA"),
+                'css_charges_66kv': css_charges.get('66', "NA"),
+                'css_charges_132kv': css_charges.get('132', "NA"),
+                'css_charges_220kv': css_charges.get('220', "NA"),
+                'additional_surcharge': as_val if as_val else "NA",
+                'electricity_duty': "NA",
+                'tax_on_sale': "NA",
+                'fixed_charge_11kv': fc.get('11', "NA"),
+                'fixed_charge_33kv': fc.get('33', "NA"),
+                'fixed_charge_66kv': fc.get('66', "NA"),
+                'fixed_charge_132kv': fc.get('132', "NA"),
+                'fixed_charge_220kv': fc.get('220', "NA"),
+                'energy_charge_11kv': ec.get('11', "NA"),
+                'energy_charge_33kv': ec.get('33', "NA"),
+                'energy_charge_66kv': ec.get('66', "NA"),
+                'energy_charge_132kv': ec.get('132', "NA"),
+                'energy_charge_220kv': ec.get('220', "NA"),
+                'fuel_surcharge': fuel_surcharge if fuel_surcharge else "NA",
+                'tod_charges': tod_charges if tod_charges else "NA",
+                'pf_rebate': pf_rebate if pf_rebate else "NA",
+                'lf_incentive': lf_incentive if lf_incentive else "NA",
+                'grid_support_parallel_op_charges': gs_charges if gs_charges else "NA",
+                'ht_ehv_rebate_33_66kv': ht_rebate if ht_rebate else "NA",
+                'ht_ehv_rebate_132_above': ehv_rebate if ehv_rebate else "NA",
+                'bulk_rebate': bulk_rebate if bulk_rebate else "NA"
+            }
+            # Sanitize
+            clean_db_data = {k: (str(v) if v is not None else "NA") for k, v in db_data.items()}
+            save_tariff_row(clean_db_data)
 
     wb.save(excel_path)
     print(f"Updated {excel_path}")

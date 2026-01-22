@@ -2,6 +2,11 @@ import json
 import re
 import os
 import openpyxl
+try:
+    from database.database_utils import save_tariff_row
+    DB_SUCCESS = True
+except ImportError:
+    DB_SUCCESS = False
 from datetime import datetime
 
 def get_financial_years():
@@ -862,7 +867,7 @@ def update_excel_with_discoms(discoms, ists, insts, insts_charges_val, wheeling_
         for discom in (discoms if discoms else ["Gen"]):
             sheet.cell(row=row_idx, column=1).value = "Himachal Pradesh"
             sheet.cell(row=row_idx, column=3).value = discom
-            if ists: sheet.cell(row=row_idx, column=4).value = str(ists) + "%"
+            if ists: sheet.cell(row=row_idx, column=4).value = str(ists)
             if insts: sheet.cell(row=row_idx, column=5).value = insts
             if wheeling_l:
                 sheet.cell(row=row_idx, column=6).value = wheeling_l.get('11')
@@ -894,6 +899,54 @@ def update_excel_with_discoms(discoms, ists, insts, insts_charges_val, wheeling_
             sheet.cell(row=row_idx, column=39).value = volt.get('33_66')
             sheet.cell(row=row_idx, column=40).value = volt.get('132_plus')
             sheet.cell(row=row_idx, column=41).value = bulk
+            
+            if DB_SUCCESS:
+                db_data = {
+                    'financial_year': "FY2025-26",
+                    'state': 'Himachal Pradesh',
+                    'discom': discom,
+                    'ists_loss': str(ists) if ists else "NA",
+                    'insts_loss': str(insts) if insts else "NA",
+                    'wheeling_loss_11kv': wheeling_l.get('11', "NA"),
+                    'wheeling_loss_33kv': wheeling_l.get('33', "NA"),
+                    'wheeling_loss_66kv': wheeling_l.get('66', "NA"),
+                    'wheeling_loss_132kv': wheeling_l.get('132', "NA"),
+                    'ists_charges': "NA",
+                    'insts_charges': str(insts_charges_val) if insts_charges_val else "NA",
+                    'wheeling_charges_11kv': wheeling_c.get('11', "NA"),
+                    'wheeling_charges_33kv': wheeling_c.get('33', "NA"),
+                    'wheeling_charges_66kv': wheeling_c.get('66', "NA"),
+                    'wheeling_charges_132kv': wheeling_c.get('132', "NA"),
+                    'css_charges_11kv': css.get('11', "NA"),
+                    'css_charges_33kv': css.get('33', "NA"),
+                    'css_charges_66kv': css.get('66', "NA"),
+                    'css_charges_132kv': css.get('132', "NA"),
+                    'css_charges_220kv': css.get('220', "NA"),
+                    'additional_surcharge': add_s if add_s else "NA",
+                    'electricity_duty': "NA",
+                    'tax_on_sale': "NA",
+                    'fixed_charge_11kv': fixed.get('11', "NA"),
+                    'fixed_charge_33kv': fixed.get('33', "NA"),
+                    'fixed_charge_66kv': fixed.get('66', "NA"),
+                    'fixed_charge_132kv': fixed.get('132', "NA"),
+                    'fixed_charge_220kv': fixed.get('220', "NA"),
+                    'energy_charge_11kv': energy.get('11', "NA"),
+                    'energy_charge_33kv': energy.get('33', "NA"),
+                    'energy_charge_66kv': energy.get('66', "NA"),
+                    'energy_charge_132kv': energy_charges.get('132', "NA") if 'energy_charges' in locals() else energy.get('132', "NA"),
+                    'energy_charge_220kv': energy_charges.get('220', "NA") if 'energy_charges' in locals() else energy.get('220', "NA"),
+                    'fuel_surcharge': fuel if fuel else "NA",
+                    'tod_charges': tod if tod else "NA",
+                    'pf_rebate': pfa if pfa else "NA",
+                    'lf_incentive': lf if lf else "NA",
+                    'grid_support_parallel_op_charges': grid if grid else "NA",
+                    'ht_ehv_rebate_33_66kv': volt.get('33_66', "NA"),
+                    'ht_ehv_rebate_132_above': volt.get('132_plus', "NA"),
+                    'bulk_rebate': bulk if bulk else "NA"
+                }
+                # Sanitize
+                clean_db_data = {k: (str(v) if v is not None else "NA") for k, v in db_data.items()}
+                save_tariff_row(clean_db_data)
             row_idx += 1
         wb.save(path)
         print(f"Updated Excel for {len(discoms)} discoms.")
@@ -992,6 +1045,7 @@ if __name__ == "__main__":
     if jsonl_file:
         print(f"Target JSONL Found: {jsonl_file}")
         ists_val = extract_ists_loss(ists_loss_file)
+        print(f"Extracted ISTS Loss: {ists_val}")
         discoms = extract_discom_names(jsonl_file, discom_file_output)
         
         insts = extract_losses(jsonl_file, fy_info)
@@ -1011,6 +1065,7 @@ if __name__ == "__main__":
         add_s = extract_additional_surcharge(jsonl_file, fy_info)
         
         update_excel_with_discoms(discoms, ists_val, insts, insts_charges_val, wheeling_l, wheeling_c, css, fixed, energy, fuel, tod, pfa, lf, grid, volt, bulk, add_s, excel_path)
+        print(f"Successfully updated {excel_path}")
     else:
         print("Error: No JSONL scraping data found for Himachal Pradesh.")
         print(f"Looked in: {extraction_dir if extraction_dir else extraction_root}")

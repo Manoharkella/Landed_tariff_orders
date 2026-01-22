@@ -2,6 +2,11 @@ import json
 import re
 import os
 import openpyxl
+try:
+    from database.database_utils import save_tariff_row
+    DB_SUCCESS = True
+except ImportError:
+    DB_SUCCESS = False
 from datetime import datetime
 
 def extract_discom_names(jsonl_path):
@@ -20,10 +25,39 @@ def find_target_col(rows, target_year="2025-26"):
                 return k
     return None
 
+def find_value_in_jsonl(jsonl_path, table_keywords, row_keywords, value_constraint=lambda x: True):
+    if not jsonl_path or not os.path.exists(jsonl_path): return "NA"
+    with open(jsonl_path, 'r', encoding='utf-8') as f:
+        for line in f:
+            try:
+                data = json.loads(line)
+                h = data.get("table_heading", "").lower()
+                heading_match = all(k.lower() in h for k in table_keywords)
+                if heading_match:
+                    for row in data.get("rows", []):
+                        row_txt = str(row).lower()
+                        if all(k.lower() in row_txt for k in row_keywords):
+                            for v in list(row.values())[::-1]:
+                                if not v: continue
+                                try:
+                                    clean = re.sub(r'[^\d\.]', '', str(v))
+                                    if clean:
+                                        f_v = float(clean)
+                                        if value_constraint(f_v):
+                                            return str(v).strip()
+                                except: pass
+            except: pass
+    return "NA"
+
+def extract_transmission_charges(jsonl_path):
+    # Search for PGCIL or Transmission Charges in Puducherry
+    return find_value_in_jsonl(jsonl_path, ["transmission", "charge"], ["rs/kwh"], lambda x: 0.1 <= x <= 2.0)
+
 def extract_losses_all(jsonl_path, target_year="2025-26"):
     wh_losses = {'11': "NA", '33': "NA", '66': "NA", '132': "NA", '220': "NA"}
     insts_loss = "NA"
     
+    if not jsonl_path or not os.path.exists(jsonl_path): return wh_losses, insts_loss
     with open(jsonl_path, 'r', encoding='utf-8') as f:
         for line in f:
             try:
@@ -70,6 +104,7 @@ def extract_losses_all(jsonl_path, target_year="2025-26"):
 
 def extract_wheeling_charges(jsonl_path, target_year="2025-26"):
     charges = {'11': "NA", '33': "NA", '66': "NA", '132': "NA", '220': "NA"}
+    if not jsonl_path or not os.path.exists(jsonl_path): return charges
     with open(jsonl_path, 'r', encoding='utf-8') as f:
         for line in f:
             try:
@@ -95,7 +130,7 @@ def extract_wheeling_charges(jsonl_path, target_year="2025-26"):
             except: pass
     
     # Fallback to Table 7-3 if still NA
-    if charges['11'] == "NA":
+    if charges['11'] == "NA" and os.path.exists(jsonl_path):
         with open(jsonl_path, 'r', encoding='utf-8') as f:
             for line in f:
                 try:
@@ -115,6 +150,7 @@ def extract_wheeling_charges(jsonl_path, target_year="2025-26"):
 
 def extract_css_charges(jsonl_path, target_year="2025-26"):
     charges = {'11': "NA", '33': "NA", '66': "NA", '132': "NA", '220': "NA"}
+    if not jsonl_path or not os.path.exists(jsonl_path): return charges
     with open(jsonl_path, 'r', encoding='utf-8') as f:
         for line in f:
             try:
@@ -143,6 +179,7 @@ def extract_css_charges(jsonl_path, target_year="2025-26"):
 
 def extract_additional_surcharge(jsonl_path, target_year="2025-26"):
     add_s = "NA"
+    if not jsonl_path or not os.path.exists(jsonl_path): return add_s
     with open(jsonl_path, 'r', encoding='utf-8') as f:
         for line in f:
             try:
@@ -168,6 +205,7 @@ def extract_fixed_energy_charges(jsonl_path, target_fy="2025-26"):
     fixed = {'11': "NA", '33': "NA", '66': "NA", '132': "NA", '220': "NA"}
     energy = {'11': "NA", '33': "NA", '66': "NA", '132': "NA", '220': "NA"}
     
+    if not jsonl_path or not os.path.exists(jsonl_path): return fixed, energy
     with open(jsonl_path, 'r', encoding='utf-8') as f:
         for line in f:
             try:
@@ -175,8 +213,6 @@ def extract_fixed_energy_charges(jsonl_path, target_fy="2025-26"):
                 rows = data.get("rows", [])
                 if not rows: continue
                 
-                # Page context check: we want the industrial rows from the tariff schedule
-                # These rows usually have HTS-IV or EHTS-II
                 for row in rows:
                     cat_raw = row.get("Consumer Category") or row.get("Category") or row.get("Column")
                     if not cat_raw: continue
@@ -188,16 +224,6 @@ def extract_fixed_energy_charges(jsonl_path, target_fy="2025-26"):
                     fc_raw = row.get("Fixed Charge") or row.get("Fixed charge")
                     ec_raw = row.get("Energy Charge") or row.get("Energy charge")
                     
-                    # If specific keys aren't found, try to find numeric values in the row
-                    if not fc_raw or not ec_raw:
-                        # Heuristic: the first number is FC, second is EC?
-                        vals = []
-                        for v in row.values():
-                            m = re.search(r'(\d+\.?\d*)', str(v))
-                            if m: vals.append(m.group(1))
-                        # This can be noisy, so we'll check if we have enough
-                        pass
-
                     fc_m = re.search(r'(\d+\.?\d*)', str(fc_raw)) if fc_raw else None
                     ec_m = re.search(r'(\d+\.?\d*)', str(ec_raw)) if ec_raw else None
                     
@@ -212,7 +238,6 @@ def extract_fixed_energy_charges(jsonl_path, target_fy="2025-26"):
                         if ec: energy['66'] = ec; energy['132'] = ec; energy['220'] = ec
             except: pass
             
-    # Final check: for HTS-IV and EHTS-II, if we still have NA, it's a failure
     print(f"Extracted Fixed: {fixed}")
     print(f"Extracted Energy: {energy}")
     return fixed, energy
@@ -223,6 +248,9 @@ def update_excel(excel_path, data_dict):
     sheet = wb.active
     h_map = {str(cell.value).strip().lower(): i+1 for i, cell in enumerate(sheet[1]) if cell.value}
     row_idx = 3
+    if sheet.max_row >= row_idx:
+        sheet.delete_rows(row_idx, sheet.max_row - row_idx + 1)
+        
     
     def set_cell(header, val):
         col = h_map.get(str(header).lower().strip())
@@ -232,7 +260,7 @@ def update_excel(excel_path, data_dict):
     set_cell('DISCOM', 'PED')
     set_cell('ISTS Loss', data_dict['ists_loss'])
     set_cell('InSTS Loss', data_dict['insts_loss'])
-    set_cell('InSTS Charges', "0.00")
+    set_cell('InSTS Charges', data_dict.get('insts_charges', "NA"))
     
     for kv in ['11', '33', '66', '132']:
         set_cell(f'Wheeling Loss - {kv} kV', data_dict['wh_losses'].get(kv, "NA"))
@@ -247,16 +275,76 @@ def update_excel(excel_path, data_dict):
     for col in ['Power Factor Adjustment Rebate', 'Load Factor Incentive', 'Fuel Surcharge', 'TOD Charges', 'Grid Support /Parrallel Operation', 'Bulk Consumption Rebate', 'HT ,EHV Rebate at 33/66 kV', 'HT ,EHV Rebate at 132 kV and above ']:
         set_cell(col, "NA")
     
+    if DB_SUCCESS:
+        db_data = {
+            'financial_year': "FY2025-26",
+            'state': 'Puducherry',
+            'discom': 'PED',
+            'ists_loss': data_dict.get('ists_loss', "NA"),
+            'insts_loss': data_dict.get('insts_loss', "NA"),
+            'wheeling_loss_11kv': data_dict['wh_losses'].get('11', "NA"),
+            'wheeling_loss_33kv': data_dict['wh_losses'].get('33', "NA"),
+            'wheeling_loss_66kv': data_dict['wh_losses'].get('66', "NA"),
+            'wheeling_loss_132kv': data_dict['wh_losses'].get('132', "NA"),
+            'ists_charges': data_dict.get('ists_charges', "NA"),
+            'insts_charges': data_dict.get('insts_charges', "NA"),
+            'wheeling_charges_11kv': data_dict['wh_charges'].get('11', "NA"),
+            'wheeling_charges_33kv': data_dict['wh_charges'].get('33', "NA"),
+            'wheeling_charges_66kv': data_dict['wh_charges'].get('66', "NA"),
+            'wheeling_charges_132kv': data_dict['wh_charges'].get('132', "NA"),
+            'css_charges_11kv': data_dict['css_charges'].get('11', "NA"),
+            'css_charges_33kv': data_dict['css_charges'].get('33', "NA"),
+            'css_charges_66kv': data_dict['css_charges'].get('66', "NA"),
+            'css_charges_132kv': data_dict['css_charges'].get('132', "NA"),
+            'css_charges_220kv': data_dict['css_charges'].get('220', "NA"),
+            'additional_surcharge': data_dict.get('additional_surcharge', "NA"),
+            'electricity_duty': "NA",
+            'tax_on_sale': "NA",
+            'fixed_charge_11kv': data_dict['fixed_charges'].get('11', "NA"),
+            'fixed_charge_33kv': data_dict['fixed_charges'].get('33', "NA"),
+            'fixed_charge_66kv': data_dict['fixed_charges'].get('66', "NA"),
+            'fixed_charge_132kv': data_dict['fixed_charges'].get('132', "NA"),
+            'fixed_charge_220kv': data_dict['fixed_charges'].get('220', "NA"),
+            'energy_charge_11kv': data_dict['energy_charges'].get('11', "NA"),
+            'energy_charge_33kv': data_dict['energy_charges'].get('33', "NA"),
+            'energy_charge_66kv': data_dict['energy_charges'].get('66', "NA"),
+            'energy_charge_132kv': data_dict['energy_charges'].get('132', "NA"),
+            'energy_charge_220kv': data_dict['energy_charges'].get('220', "NA"),
+            'fuel_surcharge': "NA",
+            'tod_charges': "NA",
+            'pf_rebate': "NA",
+            'lf_incentive': "NA",
+            'grid_support_parallel_op_charges': "NA",
+            'ht_ehv_rebate_33_66kv': "NA",
+            'ht_ehv_rebate_132_above': "NA",
+            'bulk_rebate': "NA"
+        }
+        # Sanitize
+        clean_db_data = {k: (str(v) if v is not None else "NA") for k, v in db_data.items()}
+        save_tariff_row(clean_db_data)
+        
     wb.save(excel_path)
 
 if __name__ == "__main__":
     target_fy = "2025-26"
     base_dir = os.path.dirname(os.path.abspath(__file__))
-    input_dir = os.path.join(base_dir, "Extraction", "poducherry")
+    
+    # 1. Dynamic Search for Puducherry Extraction folder
+    extraction_root = os.path.join(base_dir, "Extraction")
+    input_dir = os.path.join(extraction_root, "Puducherry")
+    
+    if not os.path.exists(input_dir) and os.path.exists(extraction_root):
+        for d in os.listdir(extraction_root):
+            if "puducherry" in d.lower() or "podu" in d.lower():
+                input_dir = os.path.join(extraction_root, d)
+                break
+
     excel_file = os.path.join(base_dir, "Puducherry.xlsx")
     ists_file = os.path.join(base_dir, "ists_extracted", "ists_loss.json")
     
-    jsonl_file = next((os.path.join(input_dir, f) for f in os.listdir(input_dir) if f.endswith(".jsonl")), None)
+    jsonl_file = None
+    if os.path.exists(input_dir):
+        jsonl_file = next((os.path.join(input_dir, f) for f in os.listdir(input_dir) if f.endswith(".jsonl")), None)
     
     if jsonl_file:
         res = {}
@@ -272,6 +360,10 @@ if __name__ == "__main__":
         res['css_charges'] = extract_css_charges(jsonl_file, target_fy)
         res['additional_surcharge'] = extract_additional_surcharge(jsonl_file, target_fy)
         res['fixed_charges'], res['energy_charges'] = extract_fixed_energy_charges(jsonl_file, target_fy)
+        res['insts_charges'] = extract_transmission_charges(jsonl_file)
+        res['ists_charges'] = "NA"
         
         update_excel(excel_file, res)
         print("Verification run completed.")
+    else:
+        print(f"Error: No JSONL file found for Puducherry in {input_dir}")

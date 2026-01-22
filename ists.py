@@ -10,11 +10,16 @@ def scrape_ists_loss():
     input_dir = os.path.join(base_dir, "ists_pdf")
     output_dir = os.path.join(base_dir, "ists_extracted")
     
-    # Create output directory if it doesn't exist
-    if not os.path.exists(output_dir):
-        os.makedirs(output_dir)
-        
     output_file = os.path.join(output_dir, "ists_loss.json")
+    
+    # Create output directory if it doesn't exist
+    if os.path.exists(output_dir):
+        # Clear existing file to ensure space for new data
+        if os.path.exists(output_file):
+            try: os.remove(output_file)
+            except: pass
+    else:
+        os.makedirs(output_dir)
     
     extracted_data = {}
 

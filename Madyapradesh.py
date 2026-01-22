@@ -2,6 +2,12 @@ import json
 import re
 import os
 import openpyxl
+try:
+    from database.database_utils import save_tariff_row
+    DB_SUCCESS = True
+except ImportError:
+    DB_SUCCESS = False
+from datetime import datetime
 
 def extract_discom_names(jsonl_path, output_path):
     discom_names = set()
@@ -49,6 +55,37 @@ def extract_ists_loss(json_path):
     except Exception as e:
         print(f"Error reading ISTS loss JSON: {e}")
     return None
+
+def find_value_in_jsonl(jsonl_path, table_keywords, row_keywords, value_constraint=lambda x: True):
+    if not jsonl_path or not os.path.exists(jsonl_path): return "NA"
+    with open(jsonl_path, 'r', encoding='utf-8') as f:
+        for line in f:
+            try:
+                data = json.loads(line)
+                h = data.get("table_heading", "").lower()
+                heading_match = all(k.lower() in h for k in table_keywords)
+                if heading_match:
+                    for row in data.get("rows", []):
+                        row_txt = str(row).lower()
+                        if all(k.lower() in row_txt for k in row_keywords):
+                            for v in list(row.values())[::-1]: # Search from end often finds numbers
+                                if not v: continue
+                                try:
+                                    clean = re.sub(r'[^\d\.]', '', str(v))
+                                    if clean:
+                                        f_v = float(clean)
+                                        if value_constraint(f_v):
+                                            return str(v).strip()
+                                except: pass
+            except: pass
+    return "NA"
+
+def extract_transmission_charges(jsonl_path):
+    # Try combined Inter/Intra table first (Table 100)
+    comb = find_value_in_jsonl(jsonl_path, ["pooled", "cost"], ["transmission", "charges"], lambda x: 0.1 <= x <= 2.0)
+    if comb != "NA": return comb
+    # Fallback to general search
+    return find_value_in_jsonl(jsonl_path, ["transmission"], ["intra-state", "charge", "rs/kwh"], lambda x: 0.1 <= x <= 2.0)
 
 def extract_losses(jsonl_path):
     insts_loss = None
@@ -668,7 +705,7 @@ def extract_bulk_consumption_rebate(jsonl_path):
     # ToD rebates exist for Bulk consumers, but they are percentages.
     return "NA"
 
-def update_excel_with_discoms(discoms, ists_loss, insts_loss, wheeling_losses, wheeling_charges, css_charges, fixed_charges, energy_charges, fuel_surcharge, pfa_rebate, lf_incentive, grid_support, voltage_rebates, bulk_rebate, add_surcharge, excel_path):
+def update_excel_with_discoms(discoms, ists_loss, insts_loss, wheeling_losses, wheeling_charges, css_charges, fixed_charges, energy_charges, fuel_surcharge, pfa_rebate, lf_incentive, grid_support, voltage_rebates, bulk_rebate, add_surcharge, insts_charges, ists_charges, excel_path):
     # Load the workbook
     try:
         wb = openpyxl.load_workbook(excel_path)
@@ -724,6 +761,9 @@ def update_excel_with_discoms(discoms, ists_loss, insts_loss, wheeling_losses, w
             # Update InSTS Loss
             if insts_loss is not None:
                 sheet.cell(row=row_idx, column=5).value = insts_loss
+            
+            # Update InSTS Charges (Col 11)
+            sheet.cell(row=row_idx, column=11).value = insts_charges
                 
             # Update Wheeling Losses
             if wheeling_losses:
@@ -801,11 +841,58 @@ def update_excel_with_discoms(discoms, ists_loss, insts_loss, wheeling_losses, w
                 sheet.cell(row=row_idx, column=40).value = "NA"
                 sheet.cell(row=row_idx, column=41).value = "NA"
 
-            # Update Bulk Consumption Rebate (Col 42)
             if bulk_rebate is not None:
                 sheet.cell(row=row_idx, column=42).value = bulk_rebate
             else:
                 sheet.cell(row=row_idx, column=42).value = "NA"
+            
+            if DB_SUCCESS:
+                db_data = {
+                    'financial_year': "FY2025-26",
+                    'state': 'Madhya Pradesh',
+                    'discom': discom,
+                    'ists_loss': str(ists_loss) if ists_loss else "NA",
+                    'insts_loss': str(insts_loss) if insts_loss else "NA",
+                    'wheeling_loss_11kv': wheeling_losses.get('11', "NA"),
+                    'wheeling_loss_33kv': wheeling_losses.get('33', "NA"),
+                    'wheeling_loss_66kv': wheeling_losses.get('66', "NA"),
+                    'wheeling_loss_132kv': wheeling_losses.get('132', "NA"),
+                    'ists_charges': str(ists_charges) if ists_charges else "NA",
+                    'insts_charges': str(insts_charges) if insts_charges else "NA",
+                    'wheeling_charges_11kv': wheeling_charges.get('11', "NA"),
+                    'wheeling_charges_33kv': wheeling_charges.get('33', "NA"),
+                    'wheeling_charges_66kv': wheeling_charges.get('66', "NA"),
+                    'wheeling_charges_132kv': wheeling_charges.get('132', "NA"),
+                    'css_charges_11kv': css_charges.get('11', "NA"),
+                    'css_charges_33kv': css_charges.get('33', "NA"),
+                    'css_charges_66kv': css_charges.get('66', "NA"),
+                    'css_charges_132kv': css_charges.get('132', "NA"),
+                    'css_charges_220kv': css_charges.get('220', "NA"),
+                    'additional_surcharge': str(add_surcharge) if add_surcharge else "NA",
+                    'electricity_duty': "NA",
+                    'tax_on_sale': "NA",
+                    'fixed_charge_11kv': fixed_charges.get('11', "NA"),
+                    'fixed_charge_33kv': fixed_charges.get('33', "NA"),
+                    'fixed_charge_66kv': fixed_charges.get('66', "NA"),
+                    'fixed_charge_132kv': fixed_charges.get('132', "NA"),
+                    'fixed_charge_220kv': fixed_charges.get('220', "NA"),
+                    'energy_charge_11kv': energy_charges.get('11', "NA"),
+                    'energy_charge_33kv': energy_charges.get('33', "NA"),
+                    'energy_charge_66kv': energy_charges.get('66', "NA"),
+                    'energy_charge_132kv': energy_charges.get('132', "NA"),
+                    'energy_charge_220kv': energy_charges.get('220', "NA"),
+                    'fuel_surcharge': str(fuel_surcharge) if fuel_surcharge else "NA",
+                    'tod_charges': "NA",
+                    'pf_rebate': str(pfa_rebate) if pfa_rebate else "NA",
+                    'lf_incentive': str(lf_incentive) if lf_incentive else "NA",
+                    'grid_support_parallel_op_charges': str(grid_support) if grid_support else "NA",
+                    'ht_ehv_rebate_33_66kv': voltage_rebates.get('33_66', "NA") if voltage_rebates else "NA",
+                    'ht_ehv_rebate_132_above': voltage_rebates.get('132_plus', "NA") if voltage_rebates else "NA",
+                    'bulk_rebate': str(bulk_rebate) if bulk_rebate else "NA"
+                }
+                # Final cleanup
+                clean_db_data = {k: (str(v) if v is not None else "NA") for k, v in db_data.items()}
+                save_tariff_row(clean_db_data)
 
         wb.save(excel_path)
         print(f"Updated {os.path.basename(excel_path)} with accurate values for {len(discoms)} discoms.")
@@ -817,14 +904,20 @@ if __name__ == "__main__":
     base_dir = os.path.dirname(os.path.abspath(__file__))
     
     # 1. JSONL finding
-    # Direct path to Extraction folder (User preference: Extraction/MadyaPradesh/madya.jsonl)
-    jsonl_file = os.path.join(base_dir, "Extraction", "MadyaPradesh", "madya.jsonl")
+    # Search for Madhya Pradesh folder in Extraction
+    extraction_root = os.path.join(base_dir, "Extraction")
+    jsonl_file = None
     
-    if not os.path.exists(jsonl_file):
-        # Additional check for case sensitivity (madya vs madhya)
-        candidate = os.path.join(base_dir, "Extraction", "MadhyaPradesh", "madya.jsonl")
-        if os.path.exists(candidate):
-            jsonl_file = candidate
+    if os.path.exists(extraction_root):
+        for dirname in os.listdir(extraction_root):
+            if "madhya" in dirname.lower() or "madya" in dirname.lower():
+                state_dir = os.path.join(extraction_root, dirname)
+                if os.path.isdir(state_dir):
+                    for f in os.listdir(state_dir):
+                        if f.endswith(".jsonl"):
+                            jsonl_file = os.path.join(state_dir, f)
+                            break
+                if jsonl_file: break
 
     # 2. Excel Path (Must match app.py state name "Madhya Pradesh")
     excel_file = os.path.join(base_dir, "Madhya Pradesh.xlsx")
@@ -853,6 +946,8 @@ if __name__ == "__main__":
         volt_reb = extract_voltage_rebates(jsonl_file)
         bulk_reb = extract_bulk_consumption_rebate(jsonl_file)
         add_surchg = extract_additional_surcharge(jsonl_file)
+        insts_charges = extract_transmission_charges(jsonl_file)
+        ists_charges = "NA" # Set to NA if no separate ISTS per-unit found
 
         update_excel_with_discoms(
             discoms,
@@ -870,6 +965,8 @@ if __name__ == "__main__":
             volt_reb,
             bulk_reb,
             add_surchg,
+            insts_charges,
+            ists_charges,
             excel_file
         )
     else:

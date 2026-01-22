@@ -4,7 +4,43 @@ from pathlib import Path
 import pandas as pd
 import re
 from openpyxl import load_workbook
+try:
+    from database.database_utils import save_tariff_row
+    DB_SUCCESS = True
+except ImportError:
+    DB_SUCCESS = False
 from datetime import datetime
+
+def find_value_in_jsonl(jsonl_path, table_keywords, row_keywords, value_constraint=lambda x: True):
+    if not jsonl_path or not os.path.exists(jsonl_path): return "NA"
+    with open(jsonl_path, 'r', encoding='utf-8') as f:
+        for line in f:
+            try:
+                data = json.loads(line)
+                h = data.get("table_heading", "").lower()
+                heading_match = all(k.lower() in h for k in table_keywords)
+                if heading_match:
+                    for row in data.get("rows", []):
+                        row_txt = str(row).lower()
+                        if all(k.lower() in row_txt for k in row_keywords):
+                            for v in list(row.values())[::-1]:
+                                if not v: continue
+                                try:
+                                    clean = re.sub(r'[^\d\.]', '', str(v))
+                                    if clean:
+                                        f_v = float(clean)
+                                        if value_constraint(f_v):
+                                            return str(v).strip()
+                                except: pass
+            except: pass
+    return "NA"
+
+def extract_transmission_charges_from_dir(input_dir):
+    if not input_dir: return "NA"
+    for jsonl_path in input_dir.glob("**/*.jsonl"):
+        val = find_value_in_jsonl(str(jsonl_path), ["transmission", "charge"], ["rs/kwh"], lambda x: 0.1 <= x <= 2.0)
+        if val != "NA": return val
+    return "NA"
 
 def get_float_val(val_str):
     if not val_str: return None
@@ -733,6 +769,25 @@ def extract_discoms():
                 ws.cell(row=r, column=c).value = str(v) if v else "NA"
 
         cr = 3
+        # Final Global Extractions
+        insts_charges_val = extract_transmission_charges_from_dir(input_dir)
+        
+        # Global Patterns for specific fields
+        patterns = {
+            'pf_rebate': (['power factor'], ['rebate', 'incentive']),
+            'lf_incentive': (['load factor'], ['incentive', 'rebate']),
+            'grid_support': (['grid support', 'parallel operation'], ['charge']),
+            'bulk_rebate': (['bulk', 'consumption'], ['rebate']),
+        }
+        
+        extra_field_vals = {}
+        for field, (tk, rk) in patterns.items():
+            found = "NA"
+            for jsonl in input_dir.glob("**/*.jsonl"):
+                found = find_value_in_jsonl(str(jsonl), tk, rk)
+                if found != "NA": break
+            extra_field_vals[field] = found
+
         for d in known:
             wv(cr, ts["d"], d); wv(cr, ts["s"], "UTTAR PRADESH")
             wv(cr, ts["il"], ists_loss_val) 
@@ -751,6 +806,54 @@ def extract_discoms():
             wv(cr, ts["br"], gvv(d, bulk_rebate))
             for i, col in enumerate(ts["f"]): wv(cr, col, gvv(d, [fixed_11kv, fixed_33kv, fixed_66kv, fixed_132kv, fixed_220kv][i]))
             for i, col in enumerate(ts["e"]): wv(cr, col, gvv(d, [energy_11kv, energy_33kv, energy_66kv, energy_132kv, energy_220kv][i]))
+            
+            if DB_SUCCESS:
+                db_data = {
+                    'financial_year': "FY2025-26",
+                    'state': 'Uttar Pradesh',
+                    'discom': d,
+                    'ists_loss': str(ists_loss_val) if ists_loss_val else "NA",
+                    'insts_loss': str(gvv(d, insts_loss)) if gvv(d, insts_loss) else "NA",
+                    'wheeling_loss_11kv': gvv(d, loss_11kv),
+                    'wheeling_loss_33kv': gvv(d, loss_33kv),
+                    'wheeling_loss_66kv': gvv(d, loss_66kv),
+                    'wheeling_loss_132kv': gvv(d, loss_132kv),
+                    'ists_charges': "NA",
+                    'insts_charges': str(insts_charges_val) if insts_charges_val else "NA",
+                    'wheeling_charges_11kv': gvv(d, charge_11kv),
+                    'wheeling_charges_33kv': gvv(d, charge_33kv),
+                    'wheeling_charges_66kv': gvv(d, charge_66kv),
+                    'wheeling_charges_132kv': gvv(d, charge_132kv),
+                    'css_charges_11kv': gvv(d, css_11kv),
+                    'css_charges_33kv': gvv(d, css_33kv),
+                    'css_charges_66kv': gvv(d, css_66kv),
+                    'css_charges_132kv': gvv(d, css_132kv),
+                    'css_charges_220kv': gvv(d, css_220kv),
+                    'additional_surcharge': gvv(d, additional_surcharge),
+                    'electricity_duty': "NA",
+                    'tax_on_sale': "NA",
+                    'fixed_charge_11kv': gvv(d, fixed_11kv),
+                    'fixed_charge_33kv': gvv(d, fixed_33kv),
+                    'fixed_charge_66kv': gvv(d, fixed_66kv),
+                    'fixed_charge_132kv': gvv(d, fixed_132kv),
+                    'fixed_charge_220kv': gvv(d, fixed_220kv),
+                    'energy_charge_11kv': gvv(d, energy_11kv),
+                    'energy_charge_33kv': gvv(d, energy_33kv),
+                    'energy_charge_66kv': gvv(d, energy_66kv),
+                    'energy_charge_132kv': gvv(d, energy_132kv),
+                    'energy_charge_220kv': gvv(d, energy_220kv),
+                    'fuel_surcharge': gvv(d, fuel_surcharge),
+                    'tod_charges': "NA",
+                    'pf_rebate': gvv(d, pf_rebate),
+                    'lf_incentive': gvv(d, lf_incentive),
+                    'grid_support_parallel_op_charges': gvv(d, grid_support),
+                    'ht_ehv_rebate_33_66kv': gvv(d, ehv_rebate_33_66),
+                    'ht_ehv_rebate_132_above': gvv(d, ehv_rebate_132_above),
+                    'bulk_rebate': gvv(d, bulk_rebate)
+                }
+                # Sanitize data: convert all values to string and replace None with NA
+                clean_db_data = {k: (str(v) if v is not None else "NA") for k, v in db_data.items()}
+                save_tariff_row(clean_db_data)
             cr += 1
         wb.save(excel_path)
         print(f"Update Success: {excel_path}")
